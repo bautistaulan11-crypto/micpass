@@ -1,0 +1,8 @@
+{
+  "name": "micpass",
+  "version": "1.0.0",
+  "description": "Collaborative karaoke rooms: TV host screen + phone joiner controls",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MicPass</title><link rel="stylesheet" href="style.css">
+<style>
+body{padding:16px;max-width:520px;margin:0 auto}.stack{display:flex;flex-direction:column;gap:10px}
+.card{margin-bottom:14px}.row{display:flex;gap:8px}.row .btn{flex:1;padding:12px 8px}
+.pill{display:inline-block;font-size:12px;color:var(--m)}#toast{position:fixed;left:16px;right:16px;bottom:16px;background:var(--a);color:var(--at);padding:14px;border-radius:14px;text-align:center;font-weight:700;display:none}
+li button{background:none;border:0;color:var(--m);font-size:18px;cursor:pointer}
+</style></head><body>
+<div id="login" class="card stack"><h3>🎤 Join a room</h3>
+ <input id="c" placeholder="Room code" maxlength="4" autocapitalize="characters" style="text-transform:uppercase;letter-spacing:4px">
+ <input id="n" placeholder="Your name" maxlength="24"><button class="btn" id="join">Join</button><div id="err" class="pill"></div></div>
+<div id="app" hidden>
+ <div class="card"><h3>Now singing</h3><div id="now" style="font-size:18px;font-weight:700">—</div><small id="by" class="pill"></small>
+  <div class="row" style="margin-top:12px"><button class="btn" id="fin">Finish &amp; score</button><button class="btn o" id="skip">Skip</button></div></div>
+ <div class="card stack"><h3>🎵 Song library</h3><input id="sq" placeholder="Search songs…"><small id="sInfo" class="pill"></small><ul id="sr"></ul></div>
+ <div class="card stack"><h3>Add a song</h3>
+  <input id="song" placeholder="Song title" maxlength="80">
+  <button class="btn o" id="find" type="button">🔍 Find karaoke version on YouTube</button>
+  <input id="url" placeholder="Paste YouTube link" inputmode="url">
+  <label class="btn o" style="text-align:center">🎹 Upload MIDI / KAR<input id="mid" type="file" accept=".mid,.midi,.kar" hidden></label>
+  <small id="midName" class="pill"></small><button class="btn" id="add">Add to queue</button></div>
+ <div class="card"><h3>Queue</h3><ul id="q"></ul></div>
+ <div class="card"><h3>🏆 Leaderboard</h3><ul id="lb"></ul></div>
+</div><div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let ws,now=null,midi=null,name=localStorage.getItem("mp_name")||"";
+$("c").value=(new URLSearchParams(location.search).get("c")||"").toUpperCase();$("n").value=name;
+const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
+function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",2600)}
+$("join").onclick=()=>{
+ const c=$("c").value.trim().toUpperCase(),n=$("n").value.trim();if(!c||!n){$("err").textContent="Enter the code and your name";return}
+ try{localStorage.setItem("mp_name",n)}catch{}
+ ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host);
+ ws.onopen=()=>send({t:"join",code:c,name:n});
+ ws.onclose=()=>{$("app").hidden=true;$("login").hidden=false;$("err").textContent="Disconnected — join again"};
+ ws.onmessage=e=>{const m=JSON.parse(e.data);
+  if(m.t==="error"){$("err").textContent=m.msg;toast(m.msg)}
+  if(m.t==="joined"){$("login").hidden=true;$("app").hidden=false}
+  if(m.t==="scored")toast(`🎉 ${m.by} scored ${m.score}!`);
+  if(m.t==="state"){now=m.now;const cur=m.queue[0];
+   $("now").textContent=cur?cur.title:"Nobody yet — add a song!";$("by").textContent=cur?cur.by:"";
+   $("fin").disabled=$("skip").disabled=!cur;
+   $("q").innerHTML=m.queue.slice(1).map(x=>`<li><div>${esc(x.title)}<small>${esc(x.by)}</small></div><button data-id="${x.id}" aria-label="Remove">✕</button></li>`).join("")||`<li style="color:var(--m)">Queue is empty</li>`;
+   $("lb").innerHTML=m.board.map((b,i)=>`<li><div>${i+1}. ${esc(b.by)}<small>${esc(b.title)}</small></div><div class="sc">${b.score}</div></li>`).join("")||`<li style="color:var(--m)">No scores yet</li>`}};
+};
+let st;$("sq").oninput=()=>{clearTimeout(st);st=setTimeout(async()=>{const q=$("sq").value.trim();if(q.length<2){$("sr").innerHTML="";return}
+ try{const r=await(await fetch("/api/search?q="+encodeURIComponent(q))).json();$("sr").innerHTML=r.map(x=>`<li><div>${esc(x.title)}</div><button class="btn" style="padding:6px 14px" data-lib="${x.id}">Add</button></li>`).join("")||`<li style="color:var(--m)">No matches</li>`}catch{$("sr").innerHTML=""}},250)};
+$("sr").onclick=e=>{const id=e.target.dataset.lib;if(id!==undefined){send({t:"addlib",id:+id});toast("Adding…")}};
+fetch("/api/status").then(r=>r.json()).then(s=>{$("sInfo").textContent=s.ready?s.count.toLocaleString()+" songs":(s.err||"Loading library…")}).catch(()=>{});
+$("q").onclick=e=>{const id=+e.target.dataset.id;if(id)send({t:"remove",id})};
+$("fin").onclick=()=>send({t:"finish",id:now});$("skip").onclick=()=>send({t:"skip",id:now});
+$("find").onclick=()=>{const t=$("song").value.trim();if(!t){$("song").focus();return}open("https://www.youtube.com/results?search_query="+encodeURIComponent(t+" karaoke"),"_blank","noopener")};
+$("add").onclick=()=>{
+ const u=$("url").value.trim(),m=u.match(/(?:youtu\.be\/|[?&]v=|embed\/|shorts\/)([\w-]{11})/);
+ if(u&&!m){toast("That doesn’t look like a YouTube link");return}
+ const title=$("song").value.trim();if(!title&&!m&&!midi){toast("Add a title, link or MIDI file");return}
+ send({t:"add",title,yt:m?m[1]:"",midi});$("song").value=$("url").value="";$("mid").value="";$("midName").textContent="";midi=null;toast("Added to the queue ✓")};
+$("mid").onchange=async e=>{const f=e.target.files[0];if(!f)return;
+ try{midi=parseMidi(await f.arrayBuffer());$("midName").textContent="✓ "+f.name+" ("+midi.notes.length+" notes"+(midi.lyr.length?", lyrics found":"")+")";if(!$("song").value)$("song").value=f.name.replace(/\.[^.]+$/,"")}
+ catch{midi=null;$("midName").textContent="Couldn’t read that file"}};
+function parseMidi(buf){
+ const d=new DataView(buf);let p=0;const u32=()=>{const v=d.getUint32(p);p+=4;return v},u16=()=>{const v=d.getUint16(p);p+=2;return v};
+ if(u32()!==0x4d546864)throw 0;u32();u16();const n=u16(),div=u16();if(div&0x8000)throw 0;
+ const ev=[],tempos=[[0,500000]];
+ for(let t=0;t<n;t++){if(u32()!==0x4d54726b)throw 0;const len=u32(),end=p+len;let tick=0,run=0;
+  const vl=()=>{let v=0,b;do{b=d.getUint8(p++);v=(v<<7)|(b&127)}while(b&128);return v};
+  while(p<end){tick+=vl();let s=d.getUint8(p);if(s<128)s=run;else p++;
+   if(s===0xff){const ty=d.getUint8(p++),l=vl();
+    if(ty===0x51)tempos.push([tick,(d.getUint8(p)<<16)|(d.getUint8(p+1)<<8)|d.getUint8(p+2)]);
+    else if(ty===1||ty===5)ev.push({tick,tx:new TextDecoder("latin1").decode(new Uint8Array(buf,p,l)),ty});p+=l}
+   else if(s===0xf0||s===0xf7)p+=vl();
+   else{run=s;const h=s>>4,ch=s&15,a=d.getUint8(p++),b=(h===0xc||h===0xd)?0:d.getUint8(p++);if(h===9&&b>0&&ch!==9)ev.push({tick,note:a})}}
+  p=end}
+ tempos.sort((x,y)=>x[0]-y[0]);
+ const sec=k=>{let t=0,last=0,tp=500000;for(const[tk,v]of tempos){if(tk>=k)break;t+=(tk-last)*tp/div/1e6;last=tk;tp=v}return t+(k-last)*tp/div/1e6};
+ const r2=x=>Math.round(x*100)/100;
+ const notes=ev.filter(e=>e.note!==undefined).slice(0,8000).map(e=>({s:r2(sec(e.tick)),n:e.note}));
+ let ly=ev.filter(e=>e.ty===5);if(!ly.length)ly=ev.filter(e=>e.ty===1&&e.tx[0]!=="@");
+ return{notes,lyr:ly.slice(0,4000).map(e=>({s:r2(sec(e.tick)),tx:e.tx}))};
+}
+</script></body></html>

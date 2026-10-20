@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MicPass Host</title><link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<style>
+body{padding:20px}
+.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px;max-width:1400px;margin:0 auto}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.stage{position:relative;aspect-ratio:16/9;background:var(--soft);border-radius:18px;overflow:hidden;display:grid;place-items:center;text-align:center}
+#yt,#yt iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.idle b{font-size:clamp(22px,4vw,44px);display:block}
+#lyr{position:absolute;left:0;right:0;bottom:16px;text-align:center;font-size:clamp(20px,3vw,34px);font-weight:800;text-shadow:0 2px 8px var(--bg)}
+#pop{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:var(--a);color:var(--at);z-index:5}
+#pop.show{display:flex}#pop b{font-size:clamp(70px,14vw,160px);line-height:1}
+#start{position:fixed;inset:0;background:var(--bg);z-index:9;display:grid;place-items:center;text-align:center}
+#start h1{font-size:clamp(36px,7vw,64px);margin:0 0 20px}
+.now{margin:12px 4px;font-size:20px;font-weight:700}.now small{color:var(--m);font-weight:400}
+#qr svg{width:100%;max-width:180px;height:auto;background:#fff;padding:8px;border-radius:12px;display:block;margin:0 auto}
+.code{text-align:center;font-size:36px;font-weight:800;letter-spacing:8px}
+.side{display:flex;flex-direction:column;gap:16px}
+</style></head><body>
+<div id="start"><div><h1>🎤 MicPass</h1><button class="btn" id="go">Start the show</button>
+<p style="color:var(--m)">Click once so the browser allows sound.</p></div></div>
+<div class="grid">
+ <div><div class="stage"><div id="yt"></div><div class="idle" id="idle"><b>Scan the QR code<br>to add a song</b></div><div id="lyr"></div><div id="pop"></div></div>
+  <div class="now" id="now"></div></div>
+ <div class="side">
+  <div class="card"><div id="qr"></div><div class="code" id="code">····</div></div>
+  <div class="card"><h3>Up next (<span id="cnt">0</span>)</h3><ul id="q"></ul></div>
+  <div class="card"><h3>🏆 Leaderboard</h3><ul id="lb"></ul></div>
+ </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let ws,code="",curNow=null,player=null,ytReady=false,pendingYt="",ac=null,timers=[],hold=0,latest=null,applyTimer=null;
+const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
+
+function connect(){
+ ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host);
+ ws.onopen=()=>send({t:"create"});
+ ws.onmessage=e=>{const m=JSON.parse(e.data);
+  if(m.t==="created"){code=m.code;$("code").textContent=code;drawQR()}
+  if(m.t==="scored"){hold=Date.now()+2600;$("pop").innerHTML=`<b>${m.score}</b><div style="font-size:28px;font-weight:700">${esc(m.by)}</div>`;$("pop").classList.add("show");setTimeout(()=>$("pop").classList.remove("show"),2400)}
+  if(m.t==="state"){latest=m;if(!applyTimer)applyTimer=setTimeout(()=>{applyTimer=null;apply(latest)},Math.max(0,hold-Date.now()))}};
+ ws.onclose=()=>{$("code").textContent="····";setTimeout(connect,2000)};
+}
+function drawQR(){
+ const url=location.origin+"/join.html?c="+code;
+ try{const q=qrcode(0,"M");q.addData(url);q.make();$("qr").innerHTML=q.createSvgTag({cellSize:4,margin:0,scalable:true})}
+ catch{$("qr").innerHTML=`<p style="text-align:center;font-size:13px;word-break:break-all">${esc(url)}</p>`}
+}
+function stopAll(){timers.forEach(clearTimeout);timers=[];if(ac){ac.close();ac=new(window.AudioContext||window.webkitAudioContext)()}$("lyr").textContent="";if(player&&ytReady)player.stopVideo();$("yt").style.visibility="hidden"}
+function apply(s){
+ $("cnt").textContent=s.queue.length;
+ $("q").innerHTML=s.queue.slice(1).map(x=>`<li><div>${esc(x.title)}<small>${esc(x.by)}</small></div></li>`).join("")||`<li style="color:var(--m)">Nothing queued</li>`;
+ $("lb").innerHTML=s.board.map((b,i)=>`<li><div>${i+1}. ${esc(b.by)}<small>${esc(b.title)}</small></div><div class="sc">${b.score}</div></li>`).join("")||`<li style="color:var(--m)">No scores yet</li>`;
+ const cur=s.queue[0];
+ $("now").innerHTML=cur?`${esc(cur.title)} <small>· ${esc(cur.by)}</small>`:"";
+ if(s.now===curNow)return;
+ curNow=s.now;stopAll();$("idle").style.display=cur?"none":"";
+ if(!cur)return;
+ if(cur.yt){$("yt").style.visibility="visible";if(ytReady)player.loadVideoById(cur.yt);else pendingYt=cur.yt}
+ else if(s.midi)playMidi(s.midi,cur.id);
+ else $("idle").style.display="",$("idle").innerHTML=`<b>${esc(cur.title)}</b>`;
+}
+// YouTube IFrame API: auto-finish when the video ends
+const tag=document.createElement("script");tag.src="https://www.youtube.com/iframe_api";document.head.appendChild(tag);
+window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("yt",{width:"100%",height:"100%",playerVars:{autoplay:1,rel:0,playsinline:1},
+ events:{onReady:()=>{ytReady=true;if(pendingYt){player.loadVideoById(pendingYt);pendingYt=""}},
+  onStateChange:e=>{if(e.data===0&&curNow)send({t:"finish",id:curNow})}}});$("yt").style.visibility="hidden"};
+// Simple MIDI synth + lyrics
+function playMidi(m,id){
+ if(!ac)ac=new(window.AudioContext||window.webkitAudioContext)();
+ const t0=ac.currentTime+.3;let end=0;
+ for(const x of m.notes){const o=ac.createOscillator(),g=ac.createGain(),t=t0+x.s;o.type="triangle";o.frequency.value=440*2**((x.n-69)/12);
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.08,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.45);o.connect(g).connect(ac.destination);o.start(t);o.stop(t+.5);end=Math.max(end,x.s)}
+ let line="";
+ for(const l of m.lyr){end=Math.max(end,l.s);timers.push(setTimeout(()=>{line=/^[\/\\]/.test(l.tx)?l.tx.slice(1):line+l.tx.replace(/[\r\n]/g,"");$("lyr").textContent=line},300+l.s*1e3))}
+ timers.push(setTimeout(()=>send({t:"finish",id}),(end+2.5)*1e3));
+}
+$("go").onclick=()=>{ac=new(window.AudioContext||window.webkitAudioContext)();$("start").style.display="none"};
+connect();
+</script></body></html>

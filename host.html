@@ -33,7 +33,7 @@ body{padding:20px}
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-let ws,code="",curNow=null,player=null,ytReady=false,pendingYt="",ac=null,timers=[],hold=0,latest=null,applyTimer=null;
+let master=null,ws,code="",curNow=null,player=null,ytReady=false,pendingYt="",ac=null,timers=[],hold=0,latest=null,applyTimer=null;
 const send=o=>ws&&ws.readyState===1&&ws.send(JSON.stringify(o));
 
 function connect(){
@@ -50,7 +50,8 @@ function drawQR(){
  try{const q=qrcode(0,"M");q.addData(url);q.make();$("qr").innerHTML=q.createSvgTag({cellSize:4,margin:0,scalable:true})}
  catch{$("qr").innerHTML=`<p style="text-align:center;font-size:13px;word-break:break-all">${esc(url)}</p>`}
 }
-function stopAll(){timers.forEach(clearTimeout);timers=[];if(ac){ac.close();ac=new(window.AudioContext||window.webkitAudioContext)()}$("lyr").textContent="";if(player&&ytReady)player.stopVideo();$("yt").style.visibility="hidden"}
+function newMaster(){if(!ac)return;if(master)master.disconnect();master=ac.createGain();master.connect(ac.destination)}
+function stopAll(){timers.forEach(clearTimeout);timers=[];newMaster();$("lyr").textContent="";if(player&&ytReady)player.stopVideo();$("yt").style.visibility="hidden"}
 function apply(s){
  $("cnt").textContent=s.queue.length;
  $("q").innerHTML=s.queue.slice(1).map(x=>`<li><div>${esc(x.title)}<small>${esc(x.by)}</small></div></li>`).join("")||`<li style="color:var(--m)">Nothing queued</li>`;
@@ -71,14 +72,15 @@ window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("yt",{width:"100%",heig
   onStateChange:e=>{if(e.data===0&&curNow)send({t:"finish",id:curNow})}}});$("yt").style.visibility="hidden"};
 // Simple MIDI synth + lyrics
 function playMidi(m,id){
- if(!ac)ac=new(window.AudioContext||window.webkitAudioContext)();
+ if(!ac)ac=new(window.AudioContext||window.webkitAudioContext)();if(!master)newMaster();ac.resume();
+ if(!m.notes.length)$("lyr").textContent="This MIDI file has no playable notes";
  const t0=ac.currentTime+.3;let end=0;
  for(const x of m.notes){const o=ac.createOscillator(),g=ac.createGain(),t=t0+x.s;o.type="triangle";o.frequency.value=440*2**((x.n-69)/12);
-  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.08,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.45);o.connect(g).connect(ac.destination);o.start(t);o.stop(t+.5);end=Math.max(end,x.s)}
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.08,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.45);o.connect(g).connect(master);o.start(t);o.stop(t+.5);end=Math.max(end,x.s)}
  let line="";
  for(const l of m.lyr){end=Math.max(end,l.s);timers.push(setTimeout(()=>{line=/^[\/\\]/.test(l.tx)?l.tx.slice(1):line+l.tx.replace(/[\r\n]/g,"");$("lyr").textContent=line},300+l.s*1e3))}
  timers.push(setTimeout(()=>send({t:"finish",id}),(end+2.5)*1e3));
 }
-$("go").onclick=()=>{ac=new(window.AudioContext||window.webkitAudioContext)();$("start").style.display="none"};
+$("go").onclick=()=>{ac=new(window.AudioContext||window.webkitAudioContext)();newMaster();ac.resume();$("start").style.display="none"};
 connect();
 </script></body></html>
